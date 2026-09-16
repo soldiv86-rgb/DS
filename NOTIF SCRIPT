@@ -1,16 +1,20 @@
-local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com" -- your bot's public URL
+local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com/report" -- FIXED: was missing "/report" - bot.py only listens on that path, so every report was 404ing
 local REPORT_SECRET = "K9mP2xR7vL4qW8nJ3tY6hB1cF5zA0eD" -- must match the bot's REPORT_SECRET
 local ACCOUNT_LABEL = "Souls" -- change per account, e.g. "Alt1", "Alt2"
+local REPORT_INTERVAL = 60
 
 local function reportToBot()
 	local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
-	if not httpRequest then return end
+	if not httpRequest then
+		warn("[AccountReporter] No HTTP request function available in this executor - can't report to bot.")
+		return
+	end
 
 	local ok, gameName = pcall(function()
-		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId).Name
+		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId, Enum.InfoType.Asset).Name
 	end)
 
-	pcall(function()
+	local success, err = pcall(function()
 		httpRequest({
 			Url = BOT_REPORT_URL,
 			Method = "POST",
@@ -21,15 +25,23 @@ local function reportToBot()
 				placeId = game.PlaceId,
 				jobId = game.JobId,
 				gameName = ok and gameName or "Unknown",
-				intervalSeconds = 60, -- how often this account reports in
+				intervalSeconds = REPORT_INTERVAL,
 			}),
 		})
 	end)
+
+	-- Was silently swallowed before - now you'll actually see in the
+	-- console if a specific account stops reporting because of a request
+	-- failure, rather than it just quietly going "offline" on the dashboard
+	-- with no explanation.
+	if not success then
+		warn("[AccountReporter] Report failed: " .. tostring(err))
+	end
 end
 
 task.spawn(function()
 	while true do
 		reportToBot()
-		task.wait(60)
+		task.wait(REPORT_INTERVAL)
 	end
 end)
