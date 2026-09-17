@@ -1,8 +1,11 @@
 local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com/report"
 local REPORT_SECRET = "K9mP2xR7vL4qW8nJ3tY6hB1cF5zA0eD" -- must match the bot's REPORT_SECRET
-local ACCOUNT_LABEL = "Souls" -- change per account, e.g. "Alt1", "Alt2" - used as a fallback if playerName is ever missing
 local REPORT_INTERVAL = 60
 local JITTER_SECONDS = 5 -- spreads multiple alts' reports out instead of all firing in the same instant
+
+-- No ACCOUNT_LABEL anymore - the account's identity IS its real Roblox
+-- username/userId now, sent automatically below. Nothing to type per
+-- account, and nothing to keep in sync if you rename an alt.
 
 local Players = game:GetService("Players")
 local HttpService = game:GetService("HttpService")
@@ -39,12 +42,11 @@ local function reportToBot()
 			Headers = { ["Content-Type"] = "application/json" },
 			Body = HttpService:JSONEncode({
 				secret = REPORT_SECRET,
-				label = ACCOUNT_LABEL,
+				userId = player.UserId,     -- stable identity - never changes even if the account is renamed
+				playerName = player.Name,   -- real Roblox username, shown on the bot's Status panel
 				placeId = game.PlaceId,
 				jobId = game.JobId,
 				gameName = cachedGameName,
-				playerName = player.Name,   -- the real Roblox username, shown on the bot's Status panel
-				userId = player.UserId,
 				intervalSeconds = REPORT_INTERVAL,
 			}),
 		})
