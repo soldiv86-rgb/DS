@@ -2,6 +2,7 @@ local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com/report"
 local REPORT_SECRET = "K9mP2xR7vL4qW8nJ3tY6hB1cF5zA0eD" -- must match the bot's REPORT_SECRET
 local REPORT_INTERVAL = 60
 local JITTER_SECONDS = 5 -- spreads multiple alts' reports out instead of all firing in the same instant
+local CHANGE_POLL_SECONDS = 1 -- how often we check for a JobId/PlaceId/respawn event worth reporting early
 
 -- No ACCOUNT_LABEL anymore - the account's identity IS its real Roblox
 -- username/userId now, sent automatically below. Nothing to type per
@@ -71,9 +72,43 @@ local function reportToBot()
 	return true
 end
 
+-- Event-driven note: teleporting to a different place or server destroys
+-- and re-runs this ENTIRE script from scratch in the new place, so
+-- game.JobId/game.PlaceId can never actually change while one script
+-- instance is alive - and the loop below already reports immediately on
+-- its very first iteration, so a teleport already gets an instant report
+-- for free with zero extra code. The JobId/PlaceId check below is kept
+-- anyway as cheap defensive code in case that ever isn't true for some
+-- executor/framework. The one real mid-session event that does NOT
+-- restart the script is a character respawn (death, or a soft "rejoin"
+-- some games do without a full teleport) - CharacterAdded below reports
+-- immediately on that, instead of waiting up to REPORT_INTERVAL.
+local pendingImmediateReport = false
+local lastJobId = game.JobId
+local lastPlaceId = game.PlaceId
+
+player.CharacterAdded:Connect(function()
+	pendingImmediateReport = true
+end)
+
 task.spawn(function()
+	local lastReportedAt = 0
+	local nextJitter = math.random(0, JITTER_SECONDS * 100) / 100
+
 	while true do
-		reportToBot()
-		task.wait(REPORT_INTERVAL + math.random(0, JITTER_SECONDS * 100) / 100)
+		local jobOrPlaceChanged = (game.JobId ~= lastJobId) or (game.PlaceId ~= lastPlaceId)
+		local dueForTimer = (os.clock() - lastReportedAt) >= (REPORT_INTERVAL + nextJitter)
+
+		if jobOrPlaceChanged or dueForTimer or pendingImmediateReport then
+			if reportToBot() then
+				lastReportedAt = os.clock()
+				lastJobId = game.JobId
+				lastPlaceId = game.PlaceId
+				pendingImmediateReport = false
+				nextJitter = math.random(0, JITTER_SECONDS * 100) / 100 -- re-roll jitter for the next cycle
+			end
+		end
+
+		task.wait(CHANGE_POLL_SECONDS)
 	end
 end)
