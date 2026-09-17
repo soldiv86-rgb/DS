@@ -1,47 +1,73 @@
-local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com/report" -- FIXED: was missing "/report" - bot.py only listens on that path, so every report was 404ing
+local BOT_REPORT_URL = "https://divine-souls-bot.onrender.com/report"
 local REPORT_SECRET = "K9mP2xR7vL4qW8nJ3tY6hB1cF5zA0eD" -- must match the bot's REPORT_SECRET
 local ACCOUNT_LABEL = "Souls" -- change per account, e.g. "Alt1", "Alt2"
 local REPORT_INTERVAL = 60
+local JITTER_SECONDS = 5 -- spreads multiple alts' reports out instead of all firing in the same instant
 
+local HttpService = game:GetService("HttpService")
+local MarketplaceService = game:GetService("MarketplaceService")
+
+-- Fetched ONCE at script start instead of on every report cycle. The game
+-- name doesn't change mid-session, so calling GetProductInfo every 60s
+-- forever was a wasted (and rate-limit-risking) API call per account.
+local cachedGameName
+do
+	local ok, name = pcall(function()
+		return MarketplaceService:GetProductInfo(game.PlaceId, Enum.InfoType.Asset).Name
+	end)
+	cachedGameName = ok and name or "Unknown"
+end
+
+-- Sends the report and returns true only if the BOT actually accepted it
+-- (HTTP 2xx). Previously, a 401 (wrong secret) or 400 (malformed body)
+-- still counted as "success" because the underlying request didn't error -
+-- it just silently never got stored by the bot, and the account would
+-- quietly show as "offline" on the dashboard with nothing explaining why.
 local function reportToBot()
 	local httpRequest = (syn and syn.request) or (http and http.request) or http_request or request
 	if not httpRequest then
 		warn("[AccountReporter] No HTTP request function available in this executor - can't report to bot.")
-		return
+		return false
 	end
 
-	local ok, gameName = pcall(function()
-		return game:GetService("MarketplaceService"):GetProductInfo(game.PlaceId, Enum.InfoType.Asset).Name
-	end)
-
-	local success, err = pcall(function()
-		httpRequest({
+	local requestOk, response = pcall(function()
+		return httpRequest({
 			Url = BOT_REPORT_URL,
 			Method = "POST",
 			Headers = { ["Content-Type"] = "application/json" },
-			Body = game:GetService("HttpService"):JSONEncode({
+			Body = HttpService:JSONEncode({
 				secret = REPORT_SECRET,
 				label = ACCOUNT_LABEL,
 				placeId = game.PlaceId,
 				jobId = game.JobId,
-				gameName = ok and gameName or "Unknown",
+				gameName = cachedGameName,
 				intervalSeconds = REPORT_INTERVAL,
 			}),
 		})
 	end)
 
-	-- Was silently swallowed before - now you'll actually see in the
-	-- console if a specific account stops reporting because of a request
-	-- failure, rather than it just quietly going "offline" on the dashboard
-	-- with no explanation.
-	if not success then
-		warn("[AccountReporter] Report failed: " .. tostring(err))
+	if not requestOk then
+		warn("[AccountReporter] Report request errored: " .. tostring(response))
+		return false
 	end
+
+	local status = response and response.StatusCode
+	local accepted = response and response.Success ~= false and (not status or (status >= 200 and status < 300))
+	if not accepted then
+		local reason = (response and response.Body) or (response and response.StatusMessage) or "no response body"
+		warn(string.format(
+			"[AccountReporter] Bot rejected the report (status %s): %s - check REPORT_SECRET matches the bot's, and that BOT_REPORT_URL is correct.",
+			tostring(status), tostring(reason)
+		))
+		return false
+	end
+
+	return true
 end
 
 task.spawn(function()
 	while true do
 		reportToBot()
-		task.wait(REPORT_INTERVAL)
+		task.wait(REPORT_INTERVAL + math.random(0, JITTER_SECONDS * 100) / 100)
 	end
 end)
